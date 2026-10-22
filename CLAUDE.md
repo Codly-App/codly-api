@@ -5,18 +5,29 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 ## Arquitetura
 
 - O servidor é a única barreira de segurança confiável. Nunca confie em dados do cliente: valide o token, o plano e o corpo de cada requisição.
-- Rotas protegidas usam sempre `requireAuth`. O usuário vem de `req.user`, nunca do corpo da requisição ou de parâmetros.
+- Toda rota nova é protegida por padrão: tudo registrado abaixo do `requireAuth` em `routes/index.ts` exige login. Uma rota pública só pode ser criada acima dessa linha, com justificativa.
+- O usuário vem de `req.user`, nunca do corpo da requisição nem de parâmetros.
 - O acesso a conteúdo é calculado no servidor pelo plano do aluno (`plan`, `status`, `trialEndsAt`). Níveis de acesso: `demo`, `basico` e `pro`.
 - Só esta API acessa o Firestore. Use sempre o `db` de `src/config/firebase.ts`.
 - Nunca leia `process.env` fora de `src/config/env.ts`. Todo o resto importa `env`.
 - A chave `service_role` do Supabase e a chave do Firebase nunca aparecem em log, resposta ou código.
 
+## Limites e segurança
+
+- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Nunca escreva esses números dentro de uma rota.
+- Os limitadores ficam em `src/middlewares/rateLimit.ts`: `globalLimiter` (por IP, em toda a API), `authFailLimiter` (falhas de login), `userLimiter` (por usuário logado) e `writeLimiter` (por usuário, em rotas que gravam).
+- Toda rota que grava dados (`POST`, `PUT`, `PATCH`, `DELETE`) usa `writeLimiter` e valida a entrada com Zod.
+- Nunca desligue, afrouxe ou contorne um limitador sem aviso e justificativa.
+- IDs vindos da URL são validados com `idParamSchema` (`schemas/common.schema.ts`) antes de chegar ao Firestore.
+- Logs nunca contêm token, cabeçalhos, query string nem dados pessoais.
+
 ## Estrutura de pastas
 
 - `src/server.ts`: ponto de entrada, só sobe o servidor.
-- `src/app.ts`: monta o Express (segurança, CORS, JSON, rotas, erros).
-- `src/config/`: ambiente e clientes externos (`env`, `firebase`, `supabase`).
-- `src/middlewares/`: autenticação, controle de acesso e tratamento de erros.
+- `src/app.ts`: monta o Express (segurança, CORS, limites, JSON, rotas, erros).
+- `src/config/`: ambiente, limites e clientes externos (`env`, `security`, `collections`, `firebase`, `supabase`).
+- `src/errors/`: erros próprios, como o `HttpError` (código HTTP e mensagem).
+- `src/middlewares/`: autenticação, limites de requisição, log e tratamento de erros.
 - `src/routes/`: só HTTP. Lê a requisição, chama um serviço e devolve a resposta. Sem regra de negócio.
 - `src/services/`: regras de negócio e acesso ao Firestore (XP, progresso, planos, amigos).
 - `src/schemas/`: schemas do Zod para validar o que chega nas rotas.
@@ -32,9 +43,10 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 
 ## Rotas e respostas
 
-- Valide sempre o corpo, os parâmetros e a query com Zod (`safeParse`). Entrada inválida responde `400` com uma mensagem clara.
+- Valide sempre o corpo, os parâmetros e a query com Zod usando `.parse()`. O `errorHandler` converte o `ZodError` em `400`, então a rota não precisa tratar.
+- Para devolver um erro, lance um `HttpError` (`throw new HttpError(403, "Seu plano não dá acesso a este conteúdo.")`). Não monte a resposta de erro na mão.
 - Todas as respostas de erro seguem o formato `{ "message": "texto amigável" }`.
-- Códigos: `400` dado inválido, `401` sem token ou token inválido, `403` plano sem acesso, `404` não encontrado, `500` erro interno.
+- Códigos: `400` dado inválido, `401` sem token ou token inválido, `403` plano sem acesso, `404` não encontrado, `413` corpo grande demais, `429` limite de requisições, `500` erro interno.
 - Handlers `async` sem `try/catch` desnecessário: o Express 5 envia o erro ao `errorHandler`. Use `try/catch` só quando precisar tratar o erro na própria rota.
 - Mensagens ao usuário em português do Brasil. Nomes de código (arquivos, variáveis, funções) em inglês.
 - Nunca devolva dados de outro usuário. Toda leitura e gravação de dados pessoais filtra pelo `req.user.id`.
@@ -47,4 +59,4 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 - Indentação de 4 espaços, igual ao `codly-app`.
 - Logs de erro com `console.error` contendo método e rota, sem dados sensíveis (token, e-mail completo, chaves).
 - Não instale bibliotecas novas sem avisar e justificar.
-- Atualize o `README.md` ao criar uma rota nova (tabela de rotas) ou uma coleção nova.
+- Atualize o `README.md` ao criar uma rota nova (tabela de rotas), uma coleção nova ou uma variável de ambiente nova.

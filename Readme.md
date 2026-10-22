@@ -47,6 +47,7 @@ App ──(Bearer token)──> Codly API ──(valida o token)──> Supabase
 - `tsx`: executa TypeScript direto no Node.js durante o desenvolvimento.
 - `zod`: valida as variáveis de ambiente e os dados recebidos nas rotas.
 - `dotenv`: carrega as variáveis do arquivo `.env`.
+- `express-rate-limit`: limita requisições por IP e por usuário.
 
 ### Segurança
 
@@ -77,32 +78,43 @@ codly-api/
    ├─ app.ts
    ├─ config/
    │  ├─ env.ts
+   │  ├─ security.ts
    │  ├─ collections.ts
    │  ├─ firebase.ts
    │  └─ supabase.ts
+   ├─ errors/
+   │  └─ HttpError.ts
    ├─ middlewares/
    │  ├─ auth.ts
+   │  ├─ rateLimit.ts
+   │  ├─ requestLogger.ts
    │  └─ error.ts
    ├─ routes/
    │  ├─ index.ts
    │  ├─ health.ts
    │  └─ me.ts
    ├─ services/
+   │  └─ users.service.ts
    ├─ schemas/
+   │  └─ common.schema.ts
    └─ types/
       └─ express.d.ts
 ```
 
 | Caminho | Função |
 | --- | --- |
-| `src/server.ts` | Ponto de entrada: sobe o servidor na porta configurada. |
-| `src/app.ts` | Monta o Express: segurança, CORS, leitura de JSON, rotas e tratamento de erro. |
+| `src/server.ts` | Ponto de entrada: sobe o servidor na porta configurada, define os timeouts e encerra de forma limpa. |
+| `src/app.ts` | Monta o Express: segurança, CORS, limites de requisição, leitura de JSON, rotas e tratamento de erro. |
 | `src/config/env.ts` | Lê e valida as variáveis de ambiente. A API não inicia se alguma estiver faltando. |
+| `src/config/security.ts` | Limites de segurança em um só lugar: tamanho do corpo, tamanho do token, timeout e limites de requisições. |
 | `src/config/collections.ts` | Nomes das coleções do Firestore (`users`, `courses`, `progress`...) em um só lugar, para não repetir texto solto nas rotas. |
 | `src/config/firebase.ts` | Inicia o Firebase Admin e exporta o Firestore (`db`). |
 | `src/config/supabase.ts` | Cria o cliente do Supabase com a chave `service_role`, usado para validar tokens. |
+| `src/errors/HttpError.ts` | Erro com código HTTP (`401`, `403`...), usado para responder com a mensagem certa. |
 | `src/middlewares/auth.ts` | `requireAuth`: confere o token e preenche `req.user`. |
-| `src/middlewares/error.ts` | Resposta para rota inexistente (`404`) e para erros inesperados (`500`), com log. |
+| `src/middlewares/rateLimit.ts` | Limites de requisições: global por IP, falhas de login, por usuário e nas rotas que gravam dados. |
+| `src/middlewares/requestLogger.ts` | Registra método, rota, status e tempo de cada requisição, sem query string nem cabeçalhos. |
+| `src/middlewares/error.ts` | Resposta para rota inexistente (`404`) e tratamento central de erros (`400`, `401`, `403`, `413` e `500`), com log. |
 | `src/routes/` | Só HTTP: lê a requisição, chama um serviço e devolve a resposta. Cada arquivo agrupa as rotas de um assunto, e o `index.ts` junta todas. Sem regra de negócio. |
 | `src/services/` | Regras de negócio e acesso ao Firestore (progresso, XP, planos, amigos). Um arquivo por assunto, reaproveitado por várias rotas. |
 | `src/schemas/` | Schemas do Zod que validam o corpo, os parâmetros e a query das requisições. |
@@ -122,9 +134,29 @@ As demais rotas (cursos, lições, progresso, XP, planos e amigos) serão adicio
 - **Rotas finas:** a rota só trata HTTP. Consultas ao Firestore e cálculos ficam em `services/`.
 - **Validação:** todo dado que chega do cliente passa por um schema do Zod antes de ser usado.
 - **Usuário:** vem sempre de `req.user`, preenchido pelo `requireAuth`. Nunca do corpo da requisição.
-- **Respostas de erro:** seguem o formato `{ "message": "texto amigável" }`, com os códigos `400`, `401`, `403`, `404` e `500`.
+- **Respostas de erro:** seguem o formato `{ "message": "texto amigável" }`, com os códigos `400`, `401`, `403`, `404`, `413`, `429` e `500`.
 - **Um arquivo por responsabilidade:** um router por arquivo e um serviço por assunto.
+- **Rotas que gravam dados:** usam o `writeLimiter` e validam a entrada com Zod.
 - **Regras completas:** estão no `CLAUDE.md`.
+
+## Segurança
+
+| Proteção | Detalhe |
+| --- | --- |
+| Limite global por IP | 300 requisições a cada 15 minutos. |
+| Limite de falhas de login | 20 tentativas com erro a cada 15 minutos, por IP. |
+| Limite por usuário | 120 requisições por minuto, em rotas protegidas. |
+| Limite de gravação | 30 requisições por minuto, em rotas que gravam dados. |
+| Tamanho do corpo | Máximo de 10 KB (`413` acima disso). |
+| CORS | Só as origens da lista `CORS_ORIGINS`. |
+| Cabeçalhos | `helmet` ativo e `x-powered-by` desligado. |
+| Cache | Respostas com `Cache-Control: no-store`. |
+| Token | Formato `Bearer` e tamanho máximo conferidos antes de consultar o Supabase. |
+| Rotas | Protegidas por padrão: tudo abaixo do `requireAuth` em `routes/index.ts` exige login. |
+| Logs | Sem token, cabeçalhos ou query string. |
+| Timeouts | Requisição com limite de 30 segundos. |
+
+Os valores ficam em `src/config/security.ts`.
 
 ## Dados no Firestore
 
@@ -158,6 +190,8 @@ cp .env.example .env
 npm run dev
 ```
 
+No PowerShell, troque o segundo comando por `Copy-Item .env.example .env`.
+
 Preencha o `.env` antes de iniciar. A API sobe em `http://localhost:3333`.
 
 | Script | O que faz |
@@ -172,7 +206,8 @@ Preencha o `.env` antes de iniciar. A API sobe em `http://localhost:3333`.
 | --- | --- |
 | `PORT` | Porta do servidor (padrão `3333`). |
 | `NODE_ENV` | `development`, `production` ou `test`. |
-| `CORS_ORIGINS` | Origens permitidas, separadas por vírgula. Inclui o app web e as origens do Capacitor (`capacitor://localhost` no iOS e `https://localhost` no Android). |
+| `TRUST_PROXY` | Quantos proxies existem na frente da API (`0` nenhum, `1` Render, Railway ou Nginx). Define de onde vem o IP usado nos limites de requisição. |
+| `CORS_ORIGINS` | Origens permitidas, separadas por vírgula. Inclui o app web e as origens do Capacitor (`capacitor://localhost` no iOS e `https://localhost` no Android). Obrigatório em produção. |
 | `SUPABASE_URL` | URL do projeto no Supabase. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Chave `service_role` do Supabase. |
 | `FIREBASE_PROJECT_ID` | ID do projeto no Firebase. |
