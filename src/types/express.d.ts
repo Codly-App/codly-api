@@ -4,6 +4,9 @@ declare global {
             user?: {
                 id: string;
                 email?: string;
+                emailVerified: boolean;
+                name?: string;
+                picture?: string;
             };
         }
     }

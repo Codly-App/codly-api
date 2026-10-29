@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { HttpError } from "../errors/HttpError";
-import { getUserProfile } from "../services/users.service";
+import { ensureUser } from "../services/users.service";
 
 export const meRouter = Router();
 
@@ -11,7 +11,7 @@ meRouter.get("/me", async (req, res) => {
         throw new HttpError(401, "Token não informado.");
     }
 
-    const profile = await getUserProfile(user.id);
+    const profile = await ensureUser(user);
 
-    res.json({ id: user.id, email: user.email, profile });
+    res.json(profile);
 });
