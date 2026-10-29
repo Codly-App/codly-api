@@ -1,12 +1,17 @@
 # Codly API: regras do projeto
 
-API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supabase e é a única parte que acessa o Firestore (Firebase Admin). O app (`codly-app`) fica em outro repositório e só conversa com esta API por HTTP. Siga estas regras em toda alteração, sem exceção.
+API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Firebase (Firebase Auth), espelha o usuário no Supabase e é a única parte que acessa o Firestore (Firebase Admin). O app (`codly-app`) fica em outro repositório e só conversa com esta API por HTTP. Siga estas regras em toda alteração, sem exceção.
 
 ## Arquitetura
 
 - O servidor é a única barreira de segurança confiável. Nunca confie em dados do cliente: valide o token, o plano e o corpo de cada requisição.
+- O token do app é o ID token do Firebase. O `requireAuth` o valida com `firebaseAuth.verifyIdToken` e preenche `req.user`.
 - Toda rota nova é protegida por padrão: tudo registrado abaixo do `requireAuth` em `routes/index.ts` exige login. Uma rota pública só pode ser criada acima dessa linha, com justificativa.
 - O usuário vem de `req.user`, nunca do corpo da requisição nem de parâmetros.
+- O usuário é criado na primeira chamada autenticada (`ensureUser`): linha na tabela `users` do Supabase e, no Firestore, os documentos de perfil, estatísticas e assinatura em período grátis.
+- O `uid` do Firebase é a chave dos documentos do Firestore (`users`, `stats`, `subscriptions`). O `id` (uuid) da tabela `users` do Supabase é interno: nunca o devolva ao app nem o use em URLs.
+- A tabela `users` do Supabase guarda só identidade (id, firebase_uid, name, email, email_verified, picture, created_at, last_login_at). XP, sequência, plano e progresso ficam só no Firestore.
+- A tabela `users` mantém RLS ativa e sem políticas. Só esta API acessa, com a `service_role`.
 - O acesso a conteúdo é calculado no servidor pelo plano do aluno (`plan`, `status`, `trialEndsAt`). Níveis de acesso: `demo`, `basico` e `pro`.
 - Só esta API acessa o Firestore. Use sempre o `db` de `src/config/firebase.ts`.
 - Nunca leia `process.env` fora de `src/config/env.ts`. Todo o resto importa `env`.
@@ -14,7 +19,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 
 ## Limites e segurança
 
-- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Nunca escreva esses números dentro de uma rota.
+- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Regras de planos (dias de teste, plano inicial) ficam em `src/config/plans.ts`. Nunca escreva esses números dentro de uma rota ou serviço.
 - Os limitadores ficam em `src/middlewares/rateLimit.ts`: `globalLimiter` (por IP, em toda a API), `authFailLimiter` (falhas de login), `userLimiter` (por usuário logado) e `writeLimiter` (por usuário, em rotas que gravam).
 - Toda rota que grava dados (`POST`, `PUT`, `PATCH`, `DELETE`) usa `writeLimiter` e valida a entrada com Zod.
 - Nunca desligue, afrouxe ou contorne um limitador sem aviso e justificativa.
@@ -25,11 +30,11 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 
 - `src/server.ts`: ponto de entrada, só sobe o servidor.
 - `src/app.ts`: monta o Express (segurança, CORS, limites, JSON, rotas, erros).
-- `src/config/`: ambiente, limites e clientes externos (`env`, `security`, `collections`, `firebase`, `supabase`).
+- `src/config/`: ambiente, limites, planos e clientes externos (`env`, `security`, `plans`, `collections`, `firebase`, `supabase`).
 - `src/errors/`: erros próprios, como o `HttpError` (código HTTP e mensagem).
 - `src/middlewares/`: autenticação, limites de requisição, log e tratamento de erros.
 - `src/routes/`: só HTTP. Lê a requisição, chama um serviço e devolve a resposta. Sem regra de negócio.
-- `src/services/`: regras de negócio e acesso ao Firestore (XP, progresso, planos, amigos).
+- `src/services/`: regras de negócio e acesso ao Firestore e ao Supabase (usuários, XP, progresso, planos, amigos).
 - `src/schemas/`: schemas do Zod para validar o que chega nas rotas.
 - `src/types/`: tipos globais e extensões do Express.
 
@@ -37,7 +42,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 
 - Um router por arquivo (`courses.ts`, `progress.ts`, `friends.ts`), registrado em `routes/index.ts`.
 - Um serviço por arquivo e por assunto (`progress.service.ts`, `xp.service.ts`). Se um arquivo passar de cerca de 100 linhas, divida.
-- Rotas finas: nada de consulta ao Firestore nem cálculo dentro da rota. Isso vai para `services/`.
+- Rotas finas: nada de consulta ao Firestore ou ao Supabase nem cálculo dentro da rota. Isso vai para `services/`.
 - Priorize funções reutilizáveis. Antes de escrever lógica nova, procure em `services/` e `middlewares/` se já existe algo parecido (por exemplo, o cálculo de acesso por plano é único e usado por todas as rotas).
 - Nomes de coleções do Firestore ficam em um só lugar (`src/config/collections.ts`), nunca como texto solto nas rotas.
 
@@ -50,6 +55,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Supa
 - Handlers `async` sem `try/catch` desnecessário: o Express 5 envia o erro ao `errorHandler`. Use `try/catch` só quando precisar tratar o erro na própria rota.
 - Mensagens ao usuário em português do Brasil. Nomes de código (arquivos, variáveis, funções) em inglês.
 - Nunca devolva dados de outro usuário. Toda leitura e gravação de dados pessoais filtra pelo `req.user.id`.
+- Respostas montam o objeto campo a campo (como o `toProfile`), sem devolver o documento inteiro do Firestore, para não vazar campos internos como `supabaseUserId`.
 
 ## Código
 

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
+import { firebaseAuth } from "../config/firebase";
 import { security } from "../config/security";
-import { supabase } from "../config/supabase";
 import { HttpError } from "../errors/HttpError";
 
 export async function requireAuth(
@@ -20,12 +20,19 @@ export async function requireAuth(
         throw new HttpError(401, "Token inválido ou expirado.");
     }
 
-    const { data, error } = await supabase.auth.getUser(token);
+    try {
+        const decoded = await firebaseAuth.verifyIdToken(token);
 
-    if (error || !data.user) {
+        req.user = {
+            id: decoded.uid,
+            email: decoded.email,
+            emailVerified: decoded.email_verified ?? false,
+            name: decoded.name,
+            picture: decoded.picture,
+        };
+    } catch {
         throw new HttpError(401, "Token inválido ou expirado.");
     }
 
-    req.user = { id: data.user.id, email: data.user.email };
     next();
 }
