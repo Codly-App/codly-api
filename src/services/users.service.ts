@@ -125,18 +125,54 @@ export async function updateUserName(authUser: AuthUser, name: string) {
 
     const userRef = db.collection(collections.users).doc(authUser.id);
 
-    const { error } = await supabase
-        .from("users")
-        .update({ name })
-        .eq("firebase_uid", authUser.id);
-
-    if (error) throw error;
-
-    await Promise.all([
-        // "nome" é o campo da API; "name" é o que a Home do app lê hoje
-        userRef.set({ nome: name, name }, { merge: true }),
-        firebaseAuth.updateUser(authUser.id, { displayName: name }),
+    // Guarda os valores atuais para poder desfazer se algo falhar
+    const [userDoc, supabaseRow] = await Promise.all([
+        userRef.get(),
+        supabase
+            .from("users")
+            .select("name")
+            .eq("firebase_uid", authUser.id)
+            .single(),
     ]);
+
+    if (supabaseRow.error) throw supabaseRow.error;
+
+    const before = userDoc.data();
+    const undo: Array<() => PromiseLike<unknown>> = [];
+
+    try {
+        const updated = await supabase
+            .from("users")
+            .update({ name })
+            .eq("firebase_uid", authUser.id)
+            .select("id")
+            .single();
+
+        if (updated.error) throw updated.error;
+
+        undo.push(() =>
+            supabase
+                .from("users")
+                .update({ name: supabaseRow.data.name })
+                .eq("firebase_uid", authUser.id),
+        );
+
+        // "nome" é o campo da API; "name" é o que a Home do app lê hoje
+        await userRef.set({ nome: name, name }, { merge: true });
+
+        undo.push(() =>
+            userRef.set(
+                { nome: before?.nome ?? "", name: before?.name ?? "" },
+                { merge: true },
+            ),
+        );
+
+        await firebaseAuth.updateUser(authUser.id, { displayName: name });
+    } catch (error) {
+        // Se qualquer passo falhar, volta os anteriores para os bancos não divergirem
+        await Promise.allSettled(undo.map((fn) => fn()));
+        throw error;
+    }
 
     const saved = await userRef.get();
 
