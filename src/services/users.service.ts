@@ -7,6 +7,8 @@ import {
 import { collections } from "../config/collections";
 import { db } from "../config/firebase";
 import { plans } from "../config/plans";
+import { firebaseAuth } from "../config/firebase";
+import { supabase } from "../config/supabase";
 import { HttpError } from "../errors/HttpError";
 import { syncSupabaseUser } from "./supabaseUsers.service";
 
@@ -112,6 +114,29 @@ export async function ensureUser(authUser: AuthUser) {
             });
         }
     });
+
+    const saved = await userRef.get();
+
+    return toProfile(authUser.id, saved.data() ?? {});
+}
+export async function updateUserName(authUser: AuthUser, name: string) {
+    // Garante que o usuário já existe nas três bases antes de alterar
+    await ensureUser(authUser);
+
+    const userRef = db.collection(collections.users).doc(authUser.id);
+
+    const { error } = await supabase
+        .from("users")
+        .update({ name })
+        .eq("firebase_uid", authUser.id);
+
+    if (error) throw error;
+
+    await Promise.all([
+        // "nome" é o campo da API; "name" é o que a Home do app lê hoje
+        userRef.set({ nome: name, name }, { merge: true }),
+        firebaseAuth.updateUser(authUser.id, { displayName: name }),
+    ]);
 
     const saved = await userRef.get();
 
