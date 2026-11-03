@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../middlewares/auth";
 import { authFailLimiter, userLimiter } from "../middlewares/rateLimit";
+import { coursesRouter } from "./courses";
 import { healthRouter } from "./health";
 import { meRouter } from "./me";
 
@@ -13,3 +14,4 @@ routes.use(healthRouter);
 routes.use(authFailLimiter, requireAuth, userLimiter);
 
 routes.use(meRouter);
+routes.use(coursesRouter);
