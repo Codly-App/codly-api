@@ -17,7 +17,7 @@ A API é responsável por:
 - Conferir quem é o usuário a partir do token de login do Firebase.
 - Criar e manter o usuário no Supabase e o perfil no Firestore na primeira vez que ele acessa.
 - Ler e gravar cursos, lições, progresso, XP, amigos e planos no Firestore.
-- Aplicar as regras de acesso por plano (Demo, Básico e Pro) e de período de teste grátis.
+- Aplicar as regras de acesso por plano (gratuito e Pro) e o limite de cursos ao mesmo tempo.
 - Registrar erros em log e devolver mensagens amigáveis.
 
 > O app nunca é a única barreira de segurança: a API também bloqueia o conteúdo protegido.
@@ -35,7 +35,7 @@ App ──(Bearer token)──> Codly API ──(valida o token)──> Firebase
 1. O usuário entra no app pelo Firebase Auth (Google ou e-mail e senha), e o Firebase devolve um token de acesso.
 2. O app envia o token em cada chamada protegida, no cabeçalho `Authorization: Bearer <token>`.
 3. O middleware `requireAuth` valida o token com o Firebase Admin (`verifyIdToken`) e guarda o usuário em `req.user`.
-4. Na primeira chamada autenticada (`GET /me`), a API cria o usuário na tabela `users` do Supabase e, no Firestore, o perfil, as estatísticas (XP e sequência) e a assinatura em período grátis. Nas chamadas seguintes ela só devolve o perfil, e atualiza o último login no máximo uma vez por hora.
+4. Na primeira chamada autenticada (`GET /me`), a API cria o usuário na tabela `users` do Supabase e, no Firestore, o perfil, as estatísticas (XP e sequência) e a assinatura (plano gratuito). Nas chamadas seguintes ela só devolve o perfil, e atualiza o último login no máximo uma vez por hora.
 5. As rotas leem ou gravam os dados do usuário no Firestore pelo Firebase Admin.
 6. Se o token faltar ou for inválido, a API responde `401`.
 
@@ -76,6 +76,8 @@ codly-api/
 ├─ CLAUDE.md
 ├─ package.json
 ├─ tsconfig.json
+├─ scripts/
+│  └─ seed-courses.ts
 └─ src/
    ├─ server.ts
    ├─ app.ts
@@ -96,12 +98,17 @@ codly-api/
    ├─ routes/
    │  ├─ index.ts
    │  ├─ health.ts
-   │  └─ me.ts
+   │  ├─ me.ts
+   │  └─ courses.ts
    ├─ services/
    │  ├─ users.service.ts
-   │  └─ supabaseUsers.service.ts
+   │  ├─ supabaseUsers.service.ts
+   │  ├─ subscriptions.service.ts
+   │  └─ courses.service.ts
    ├─ schemas/
-   │  └─ common.schema.ts
+   │  ├─ common.schema.ts
+   │  ├─ me.schema.ts
+   │  └─ courses.schema.ts
    └─ types/
       └─ express.d.ts
 ```
@@ -112,7 +119,7 @@ codly-api/
 | `src/app.ts` | Monta o Express: segurança, CORS, limites de requisição, leitura de JSON, rotas e tratamento de erro. |
 | `src/config/env.ts` | Lê e valida as variáveis de ambiente. A API não inicia se alguma estiver faltando. |
 | `src/config/security.ts` | Limites de segurança em um só lugar: tamanho do corpo, tamanho do token, timeout e limites de requisições. |
-| `src/config/plans.ts` | Regras de planos: duração do período grátis, plano inicial e status do teste. |
+| `src/config/plans.ts` | Regras de planos: os dois planos (`free` e `pro`) e seus níveis, o limite de cursos ativos de cada um, o plano inicial e a duração do período de teste. |
 | `src/config/collections.ts` | Nomes das coleções do Firestore (`users`, `courses`, `progress`...) em um só lugar, para não repetir texto solto nas rotas. |
 | `src/config/firebase.ts` | Inicia o Firebase Admin e exporta o Firestore (`db`) e o Auth (`firebaseAuth`). |
 | `src/config/supabase.ts` | Cria o cliente do Supabase com a chave `service_role`, usado na tabela `users` e no Storage. |
@@ -124,7 +131,10 @@ codly-api/
 | `src/routes/` | Só HTTP: lê a requisição, chama um serviço e devolve a resposta. Cada arquivo agrupa as rotas de um assunto, e o `index.ts` junta todas. Sem regra de negócio. |
 | `src/services/users.service.ts` | Cria e mantém o usuário: perfil, estatísticas e assinatura no Firestore, e o vínculo com o Supabase. |
 | `src/services/supabaseUsers.service.ts` | Cria ou atualiza o usuário na tabela `users` do Supabase e devolve o seu `id`. |
-| `src/schemas/` | Schemas do Zod que validam o corpo, os parâmetros e a query das requisições. |
+| `src/services/subscriptions.service.ts` | Descobre o plano que vale agora para o usuário (`getUserPlan`). Plano desconhecido, teste vencido ou assinatura inativa voltam para o gratuito. |
+| `src/services/courses.service.ts` | Lista os cursos com o progresso do usuário e o motivo da trava, e adiciona ou remove um curso conferindo o plano e o limite dentro de uma transação. |
+| `src/schemas/` | Schemas do Zod que validam o corpo, os parâmetros e a query das requisições (`me.schema.ts` para o nome e `courses.schema.ts` para o id do curso). |
+| `scripts/seed-courses.ts` | Grava o catálogo inicial de cursos no Firestore. Pode rodar mais de uma vez sem duplicar. |
 | `src/types/` | Tipos globais, como o `req.user` adicionado ao Express. |
 
 ## Rotas
@@ -133,8 +143,12 @@ codly-api/
 | --- | --- | --- | --- |
 | `GET` | `/health` | Pública | Confirma que a API está no ar. |
 | `GET` | `/me` | Com token | Devolve o perfil do usuário logado. Na primeira chamada, cria o usuário no Supabase e o perfil, as estatísticas e a assinatura no Firestore. |
+| `PATCH` | `/me` | Com token | Altera o nome (2 a 50 letras). Grava no Supabase, no Firestore (`nome` e `name`) e no Firebase Auth e, se um passo falhar, desfaz os anteriores. |
+| `GET` | `/courses` | Com token | Lista os cursos publicados com `lessonsDone`, `enrolled` e `lockReason` (`plan`, `limit` ou `null`). |
+| `PUT` | `/me/courses/:courseId` | Com token | Adiciona o curso. `403` se o curso é exclusivo do Pro ou se o limite de cursos do plano foi atingido, `404` se não existe. Repetir o pedido não dá erro. |
+| `DELETE` | `/me/courses/:courseId` | Com token | Remove o curso da lista do usuário e mantém o progresso salvo. Sempre permitido. |
 
-As demais rotas (cursos, lições, progresso, XP, planos e amigos) serão adicionadas conforme o desenvolvimento.
+As rotas de configurações do usuário (`GET` e `PATCH /me/settings`, usadas pelas telas de preferências, notificações e privacidade) e a de excluir a conta (`DELETE /me`) ainda **não existem**. As demais (lições, progresso, XP e amigos) serão adicionadas conforme o desenvolvimento.
 
 ## Convenções
 
@@ -189,25 +203,34 @@ Dados de estudo (XP, sequência, plano, progresso) ficam só no Firestore, nunca
 | Coleção | Campos principais |
 | --- | --- |
 | `users` | userId, supabaseUserId, nome, email, avatar, tema, metaDiaria, createdAt, lastSyncAt |
-| `courses` | id, slug, titulo, descricao, ordem, status |
+| `courses` | id (ex.: `sql-basico`), title, description, iconKey, lessonsTotal, requiredPlan (`free` ou `pro`), order, published |
 | `modules` | courseId, titulo, ordem, nivel |
 | `lessons` | moduleId, titulo, tipo, conteudo, xp, accessLevel |
 | `exercises` | lessonId, tipo, enunciado, opções, resposta/validador |
-| `progress` | userId, lessonId, status, score, attempts, completedAt |
+| `progress` | Hoje por curso: userId, courseId, enrolled, lessonsDone, enrolledAt, updatedAt. O progresso por lição (lessonId, status, score, attempts, completedAt) será acrescentado com as lições. |
 | `stats` | userId, xp, streak, lastStudyDate, totalLessons |
 | `subscriptions` | userId, plan, status, trialEndsAt, updatedAt |
 | `friendships` | userId, friendId, status, createdAt |
 
-Os documentos de `users`, `stats` e `subscriptions` usam o `uid` do Firebase como ID.
+Os documentos de `users`, `stats` e `subscriptions` usam o `uid` do Firebase como ID. O de `progress` usa `{uid}_{courseId}`, e o de `courses` usa o id do curso.
 
 ## Regras de acesso por plano
 
-- Cada lição tem um nível de acesso: `demo`, `basico` ou `pro`.
-- A API calcula o acesso pelo plano do aluno e pelo fim do período grátis (`trialEndsAt`).
-- Todo usuário novo começa no plano `demo`, com status `trialing` e 7 dias de teste (`src/config/plans.ts`).
-- **Demo:** só conteúdo iniciante. Depois do fim do período, o usuário vê o progresso e a tela de upgrade.
-- **Básico:** SQL e JavaScript até o nível intermediário.
-- **Pro:** todo o conteúdo.
+Existem só dois planos, definidos em `src/config/plans.ts`:
+
+| | Gratuito (`free`) | Pro (`pro`) |
+| --- | --- | --- |
+| Cursos iniciais (SQL e JavaScript do zero) | Sim | Sim |
+| Cursos avançados | Não | Sim |
+| Cursos ativos ao mesmo tempo | Até 2 | Sem limite (3 ou mais) |
+
+- Todo usuário novo começa no plano `free` (`plans.defaultPlan`).
+- A API calcula o plano que vale agora em `getUserPlan`: o Pro só vale com a assinatura ativa (`status: "active"`) ou com o período de teste em dia (`trialEndsAt`). Caso contrário, vale o gratuito.
+- Cada curso tem um `requiredPlan`. Se o usuário não tem esse plano, o curso vem com `lockReason: "plan"` e `PUT /me/courses/:courseId` responde `403`.
+- Se o usuário já está no limite de cursos ativos do plano, os outros cursos vêm com `lockReason: "limit"` e o `PUT` responde `403`. A contagem e a gravação acontecem na mesma transação, então dois pedidos ao mesmo tempo não passam do limite.
+- Quem tem um curso nunca o vê travado, mesmo se o plano mudar. As rotas de lição conferem o plano de novo.
+- Valor de plano desconhecido falha fechado: no usuário vira `free`, e no curso exige `pro`.
+- O período de teste de 7 dias (`trialDays`) ainda é criado para novos usuários, mas o plano inicial é o gratuito, então hoje ele não muda o acesso.
 
 ## Como rodar
 
@@ -228,6 +251,7 @@ Antes da primeira execução, crie a tabela `users` no Supabase (SQL Editor) com
 | `npm run dev` | Inicia em modo de desenvolvimento, reiniciando a cada alteração. |
 | `npm run build` | Compila o TypeScript para a pasta `dist/`. |
 | `npm start` | Executa a versão compilada (produção). |
+| `npx tsx scripts/seed-courses.ts` | Grava o catálogo de cursos no Firestore (rode uma vez, e de novo quando mudar o catálogo). Grava no projeto do `.env`. |
 
 ## Variáveis de ambiente
 

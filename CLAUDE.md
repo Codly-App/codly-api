@@ -8,22 +8,26 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 - O token do app é o ID token do Firebase. O `requireAuth` o valida com `firebaseAuth.verifyIdToken` e preenche `req.user`.
 - Toda rota nova é protegida por padrão: tudo registrado abaixo do `requireAuth` em `routes/index.ts` exige login. Uma rota pública só pode ser criada acima dessa linha, com justificativa.
 - O usuário vem de `req.user`, nunca do corpo da requisição nem de parâmetros.
-- O usuário é criado na primeira chamada autenticada (`ensureUser`): linha na tabela `users` do Supabase e, no Firestore, os documentos de perfil, estatísticas e assinatura em período grátis.
+- O usuário é criado na primeira chamada autenticada (`ensureUser`): linha na tabela `users` do Supabase e, no Firestore, os documentos de perfil, estatísticas e assinatura (plano gratuito).
 - O `uid` do Firebase é a chave dos documentos do Firestore (`users`, `stats`, `subscriptions`). O `id` (uuid) da tabela `users` do Supabase é interno: nunca o devolva ao app nem o use em URLs.
 - A tabela `users` do Supabase guarda só identidade (id, firebase_uid, name, email, email_verified, picture, created_at, last_login_at). XP, sequência, plano e progresso ficam só no Firestore.
 - A tabela `users` mantém RLS ativa e sem políticas. Só esta API acessa, com a `service_role`.
-- O acesso a conteúdo é calculado no servidor pelo plano do aluno (`plan`, `status`, `trialEndsAt`). Níveis de acesso: `demo`, `basico` e `pro`.
+- O acesso a conteúdo é calculado no servidor pelo plano do aluno (`plan`, `status`, `trialEndsAt`), em `getUserPlan` (`services/subscriptions.service.ts`). Existem só dois planos: `free` (padrão) e `pro`.
+- Regras dos planos: cursos avançados são exclusivos do Pro, e o plano gratuito tem limite de cursos ativos ao mesmo tempo (`plans.limits`). O Pro não tem limite. A trava é sempre aplicada na API; o app só mostra o motivo (`lockReason`: `plan` ou `limit`).
+- Dado de plano inválido ou desconhecido falha fechado: no usuário vira `free` e no curso exige `pro`. Nunca libere acesso por causa de um valor inesperado.
+- Remover um curso só marca `enrolled: false` em `progress`. O progresso (`lessonsDone`) nunca é apagado por isso.
 - Só esta API acessa o Firestore. Use sempre o `db` de `src/config/firebase.ts`.
 - Nunca leia `process.env` fora de `src/config/env.ts`. Todo o resto importa `env`.
 - A chave `service_role` do Supabase e a chave do Firebase nunca aparecem em log, resposta ou código.
 
 ## Limites e segurança
 
-- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Regras de planos (dias de teste, plano inicial) ficam em `src/config/plans.ts`. Nunca escreva esses números dentro de uma rota ou serviço.
+- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Regras de planos (níveis, limites de cursos, dias de teste, plano inicial) ficam em `src/config/plans.ts`. Nunca escreva esses números dentro de uma rota ou serviço.
 - Os limitadores ficam em `src/middlewares/rateLimit.ts`: `globalLimiter` (por IP, em toda a API), `authFailLimiter` (falhas de login), `userLimiter` (por usuário logado) e `writeLimiter` (por usuário, em rotas que gravam).
 - Toda rota que grava dados (`POST`, `PUT`, `PATCH`, `DELETE`) usa `writeLimiter` e valida a entrada com Zod.
 - Nunca desligue, afrouxe ou contorne um limitador sem aviso e justificativa.
-- IDs vindos da URL são validados com `idParamSchema` (`schemas/common.schema.ts`) antes de chegar ao Firestore.
+- IDs vindos da URL são validados antes de chegar ao Firestore: `idParamSchema` (`schemas/common.schema.ts`) e `courseParamSchema` (`schemas/courses.schema.ts`). Só aceitam letras, números, `_` e `-`.
+- Quando uma gravação depende de uma contagem (como o limite de cursos ativos), faça a leitura e a gravação dentro da mesma transação do Firestore, para dois pedidos ao mesmo tempo não passarem do limite.
 - Logs nunca contêm token, cabeçalhos, query string nem dados pessoais.
 
 ## Estrutura de pastas
@@ -37,6 +41,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 - `src/services/`: regras de negócio e acesso ao Firestore e ao Supabase (usuários, XP, progresso, planos, amigos).
 - `src/schemas/`: schemas do Zod para validar o que chega nas rotas.
 - `src/types/`: tipos globais e extensões do Express.
+- `scripts/`: tarefas avulsas rodadas à mão com `npx tsx` (como `seed-courses.ts`). Ficam fora do `src` e não entram no build. Gravam no Firestore do `.env`, então confira o ambiente antes de rodar.
 
 ## Um arquivo, uma responsabilidade
 
