@@ -4,14 +4,16 @@ import { authFailLimiter, userLimiter } from "../middlewares/rateLimit";
 import { coursesRouter } from "./courses";
 import { healthRouter } from "./health";
 import { meRouter } from "./me";
+import { usersRouter } from "./users";
 
 export const routes = Router();
 
-// Rotas públicas (só o limite global por IP)
+// Rotas públicas
 routes.use(healthRouter);
 
-// A partir daqui, tudo exige token válido
+// Rotas protegidas pelo Firebase Authentication
 routes.use(authFailLimiter, requireAuth, userLimiter);
 
 routes.use(meRouter);
 routes.use(coursesRouter);
+routes.use(usersRouter);
