@@ -21,9 +21,9 @@ const SYNC_INTERVAL_MS = 60 * 60 * 1000;
 function toProfile(userId: string, data: DocumentData) {
     return {
         id: userId,
-        nome: data.nome ?? "",
+        name: data.nome ?? data.name ?? "",
         email: data.email ?? "",
-        avatar: data.avatar ?? "",
+        photoURL: data.avatar ?? "",
         tema: data.tema ?? "system",
         metaDiaria: data.metaDiaria ?? 1,
     };
