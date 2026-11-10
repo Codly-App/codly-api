@@ -22,7 +22,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 
 ## Limites e segurança
 
-- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Regras de planos (níveis, limites de cursos, dias de teste, plano inicial) ficam em `src/config/plans.ts`. Nunca escreva esses números dentro de uma rota ou serviço.
+- Todo limite (requisições, tamanho do corpo, tamanho do token, timeout) fica em `src/config/security.ts`. Regras de planos (níveis, limites de cursos, dias de teste, plano inicial) ficam em `src/config/plans.ts`, e as de nível e meta diária (XP por nível, metas aceitas, fuso do dia) em `src/config/levels.ts`. Nunca escreva esses números dentro de uma rota ou serviço.
 - Os limitadores ficam em `src/middlewares/rateLimit.ts`: `globalLimiter` (por IP, em toda a API), `authFailLimiter` (falhas de login), `userLimiter` (por usuário logado) e `writeLimiter` (por usuário, em rotas que gravam).
 - Toda rota que grava dados (`POST`, `PUT`, `PATCH`, `DELETE`) usa `writeLimiter` e valida a entrada com Zod.
 - Nunca desligue, afrouxe ou contorne um limitador sem aviso e justificativa.
@@ -34,7 +34,7 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 
 - `src/server.ts`: ponto de entrada, só sobe o servidor.
 - `src/app.ts`: monta o Express (segurança, CORS, limites, JSON, rotas, erros).
-- `src/config/`: ambiente, limites, planos e clientes externos (`env`, `security`, `plans`, `collections`, `firebase`, `supabase`).
+- `src/config/`: ambiente, limites, planos, níveis e clientes externos (`env`, `security`, `plans`, `levels`, `collections`, `firebase`, `supabase`).
 - `src/errors/`: erros próprios, como o `HttpError` (código HTTP e mensagem).
 - `src/middlewares/`: autenticação, limites de requisição, log e tratamento de erros.
 - `src/routes/`: só HTTP. Lê a requisição, chama um serviço e devolve a resposta. Sem regra de negócio.

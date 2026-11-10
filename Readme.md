@@ -85,6 +85,7 @@ codly-api/
    │  ├─ env.ts
    │  ├─ security.ts
    │  ├─ plans.ts
+   │  ├─ levels.ts
    │  ├─ collections.ts
    │  ├─ firebase.ts
    │  └─ supabase.ts
@@ -99,16 +100,20 @@ codly-api/
    │  ├─ index.ts
    │  ├─ health.ts
    │  ├─ me.ts
-   │  └─ courses.ts
+   │  ├─ courses.ts
+   │  └─ users.ts
    ├─ services/
    │  ├─ users.service.ts
+   │  ├─ usersSearch.service.ts
    │  ├─ supabaseUsers.service.ts
    │  ├─ subscriptions.service.ts
-   │  └─ courses.service.ts
+   │  ├─ courses.service.ts
+   │  └─ summary.service.ts
    ├─ schemas/
    │  ├─ common.schema.ts
    │  ├─ me.schema.ts
-   │  └─ courses.schema.ts
+   │  ├─ courses.schema.ts
+   │  └─ users.schema.ts
    └─ types/
       └─ express.d.ts
 ```
@@ -120,6 +125,7 @@ codly-api/
 | `src/config/env.ts` | Lê e valida as variáveis de ambiente. A API não inicia se alguma estiver faltando. |
 | `src/config/security.ts` | Limites de segurança em um só lugar: tamanho do corpo, tamanho do token, timeout e limites de requisições. |
 | `src/config/plans.ts` | Regras de planos: os dois planos (`free` e `pro`) e seus níveis, o limite de cursos ativos de cada um, o plano inicial e a duração do período de teste. |
+| `src/config/levels.ts` | Regras de nível e de meta diária: quantos XP vale cada nível (500), as metas aceitas (20, 50 e 100 XP), a meta padrão (50) e o fuso usado para contar o dia (Brasília). |
 | `src/config/collections.ts` | Nomes das coleções do Firestore (`users`, `courses`, `progress`...) em um só lugar, para não repetir texto solto nas rotas. |
 | `src/config/firebase.ts` | Inicia o Firebase Admin e exporta o Firestore (`db`) e o Auth (`firebaseAuth`). |
 | `src/config/supabase.ts` | Cria o cliente do Supabase com a chave `service_role`, usado na tabela `users` e no Storage. |
@@ -130,10 +136,12 @@ codly-api/
 | `src/middlewares/error.ts` | Resposta para rota inexistente (`404`) e tratamento central de erros (`400`, `401`, `403`, `413` e `500`), com log. |
 | `src/routes/` | Só HTTP: lê a requisição, chama um serviço e devolve a resposta. Cada arquivo agrupa as rotas de um assunto, e o `index.ts` junta todas. Sem regra de negócio. |
 | `src/services/users.service.ts` | Cria e mantém o usuário: perfil, estatísticas e assinatura no Firestore, e o vínculo com o Supabase. |
+| `src/services/usersSearch.service.ts` | Busca usuários por início do nome ou pelo código (uid) exato, sem o próprio usuário, e devolve só dados públicos (`uid`, `name`, `avatarUrl`). No máximo 20 resultados. |
 | `src/services/supabaseUsers.service.ts` | Cria ou atualiza o usuário na tabela `users` do Supabase e devolve o seu `id`. |
 | `src/services/subscriptions.service.ts` | Descobre o plano que vale agora para o usuário (`getUserPlan`). Plano desconhecido, teste vencido ou assinatura inativa voltam para o gratuito. |
 | `src/services/courses.service.ts` | Lista os cursos com o progresso do usuário e o motivo da trava, e adiciona ou remove um curso conferindo o plano e o limite dentro de uma transação. |
-| `src/schemas/` | Schemas do Zod que validam o corpo, os parâmetros e a query das requisições (`me.schema.ts` para o nome e `courses.schema.ts` para o id do curso). |
+| `src/services/summary.service.ts` | Monta o resumo do aluno para a tela inicial e o perfil: plano, XP, nível, sequência, meta do dia e cursos ativos (o curso mexido por último vem primeiro). A sequência volta a 0 se o aluno não estudou ontem nem hoje, e o XP do dia só vale se for de hoje. |
+| `src/schemas/` | Schemas do Zod que validam o corpo, os parâmetros e a query das requisições (`me.schema.ts` para o nome, `courses.schema.ts` para o id do curso e `users.schema.ts` para a busca). |
 | `scripts/seed-courses.ts` | Grava o catálogo inicial de cursos no Firestore. Pode rodar mais de uma vez sem duplicar. |
 | `src/types/` | Tipos globais, como o `req.user` adicionado ao Express. |
 
@@ -142,13 +150,15 @@ codly-api/
 | Método | Rota | Acesso | Descrição |
 | --- | --- | --- | --- |
 | `GET` | `/health` | Pública | Confirma que a API está no ar. |
-| `GET` | `/me` | Com token | Devolve o perfil do usuário logado. Na primeira chamada, cria o usuário no Supabase e o perfil, as estatísticas e a assinatura no Firestore. |
+| `GET` | `/me` | Com token | Devolve o perfil do usuário logado (`id`, `name`, `email`, `photoURL`, `tema`, `metaDiaria`). Na primeira chamada, cria o usuário no Supabase e o perfil, as estatísticas e a assinatura no Firestore. |
+| `GET` | `/me/summary` | Com token | Resumo do aluno: `plan`, `stats` (`xp`, `streak`, `level`, `levelXp`, `nextLevelXp`), `dailyGoal` (`earnedXp`, `targetXp`) e `courses` ativos com `lessonsDone` e `lessonsTotal`. Cria o usuário no primeiro acesso. |
+| `GET` | `/users/search?q=` | Com token | Busca pessoas por nome ou código. Devolve `uid`, `name` e `avatarUrl`, sem o próprio usuário. |
 | `PATCH` | `/me` | Com token | Altera o nome (2 a 50 letras). Grava no Supabase, no Firestore (`nome` e `name`) e no Firebase Auth e, se um passo falhar, desfaz os anteriores. |
 | `GET` | `/courses` | Com token | Lista os cursos publicados com `lessonsDone`, `enrolled` e `lockReason` (`plan`, `limit` ou `null`). |
 | `PUT` | `/me/courses/:courseId` | Com token | Adiciona o curso. `403` se o curso é exclusivo do Pro ou se o limite de cursos do plano foi atingido, `404` se não existe. Repetir o pedido não dá erro. |
 | `DELETE` | `/me/courses/:courseId` | Com token | Remove o curso da lista do usuário e mantém o progresso salvo. Sempre permitido. |
 
-As rotas de configurações do usuário (`GET` e `PATCH /me/settings`, usadas pelas telas de preferências, notificações e privacidade) e a de excluir a conta (`DELETE /me`) ainda **não existem**. As demais (lições, progresso, XP e amigos) serão adicionadas conforme o desenvolvimento.
+As rotas de configurações do usuário (`GET` e `PATCH /me/settings`, usadas pelas telas de preferências, notificações e privacidade) e a de excluir a conta (`DELETE /me`) ainda **não existem**. O XP do dia (`dailyXp` e `dailyXpDate` na coleção `stats`) ainda não é gravado por nenhuma rota, e só passa a valer com a conclusão de lições. As demais (lições, progresso, XP e amigos) serão adicionadas conforme o desenvolvimento.
 
 ## Convenções
 
