@@ -55,7 +55,7 @@ export async function getSummary(userId: string) {
     const streakAlive = lastStudy === today || lastStudy === yesterday;
     const xp = Number(stats?.xp ?? 0);
 
-    const goal = Number(user?.metaDiaria);
+    const goal = Number(user?.settings?.preferences?.dailyGoalXp);
     const targetXp = (levels.allowedDailyGoals as readonly number[]).includes(goal)
         ? goal
         : levels.defaultDailyGoalXp;
