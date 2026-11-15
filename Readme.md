@@ -35,7 +35,7 @@ App ──(Bearer token)──> Codly API ──(valida o token)──> Firebase
 1. O usuário entra no app pelo Firebase Auth (Google ou e-mail e senha), e o Firebase devolve um token de acesso.
 2. O app envia o token em cada chamada protegida, no cabeçalho `Authorization: Bearer <token>`.
 3. O middleware `requireAuth` valida o token com o Firebase Admin (`verifyIdToken`) e guarda o usuário em `req.user`.
-4. Na primeira chamada autenticada (`GET /me`), a API cria o usuário na tabela `users` do Supabase e, no Firestore, o perfil, as estatísticas (XP e sequência) e a assinatura (plano gratuito). Nas chamadas seguintes ela só devolve o perfil, e atualiza o último login no máximo uma vez por hora.
+4. Na primeira chamada autenticada (`GET /me`, `GET /me/summary` ou `/me/settings`), a API cria o usuário na tabela `users` do Supabase e, no Firestore, o perfil, as estatísticas (XP e sequência) e a assinatura (plano gratuito). Nas chamadas seguintes ela só devolve o perfil, e atualiza o último login no máximo uma vez por hora.
 5. As rotas leem ou gravam os dados do usuário no Firestore pelo Firebase Admin.
 6. Se o token faltar ou for inválido, a API responde `401`.
 
@@ -61,6 +61,10 @@ App ──(Bearer token)──> Codly API ──(valida o token)──> Firebase
 
 - `firebase-admin`: SDK de servidor com acesso total ao Firestore e verificação dos tokens do Firebase Auth.
 - `@supabase/supabase-js`: acessa a tabela `users` e o Storage de imagens do Supabase com a chave `service_role`.
+
+### Observabilidade
+
+- `@opentelemetry/api`: interface padrão do OpenTelemetry (rastreamento e métricas). Está como dependência direta, mas **nenhum código da API a usa**: ela já chega como dependência opcional do `firebase-admin` e do Firestore. Sozinha, não coleta nada. Para ter rastreamento seria preciso instalar também um SDK e um exportador.
 
 ### Tipos (desenvolvimento)
 
@@ -159,7 +163,7 @@ codly-api/
 | `GET` | `/me/summary` | Com token | Resumo do aluno: `plan`, `stats` (`xp`, `streak`, `level`, `levelXp`, `nextLevelXp`), `dailyGoal` (`earnedXp`, `targetXp`) e `courses` ativos com `lessonsDone` e `lessonsTotal`. Cria o usuário no primeiro acesso. |
 | `GET` | `/me/settings` | Com token | Devolve as configurações: `privacy`, `preferences` (`dailyGoalXp`, `soundEffects`, `reduceMotion`) e `notifications`. O que o usuário nunca mudou vem com o valor padrão. |
 | `PATCH` | `/me/settings` | Com token | Altera só os campos enviados (por grupo). Recusa campo desconhecido e meta diária fora de 20, 50 e 100 (`400`). Devolve o conjunto completo. |
-| `GET` | `/users/search?q=` | Com token | Busca pessoas por nome ou código. Devolve `uid`, `name` e `avatarUrl`, sem o próprio usuário. |
+| `GET` | `/users/search?q=` | Com token | Busca pessoas pelo começo do nome ou pelo código (`uid`) exato. `q` precisa ter de 2 a 80 letras (`400` se for menor). Devolve até 20 resultados com `uid`, `name` e `avatarUrl`, sem o próprio usuário. Ainda **não** respeita a opção `allowFriendRequests` de quem desligou os pedidos de amizade. |
 | `PATCH` | `/me` | Com token | Altera o nome (2 a 50 letras). Grava no Supabase, no Firestore (`nome` e `name`) e no Firebase Auth e, se um passo falhar, desfaz os anteriores. |
 | `GET` | `/courses` | Com token | Lista os cursos publicados com `lessonsDone`, `enrolled` e `lockReason` (`plan`, `limit` ou `null`). |
 | `PUT` | `/me/courses/:courseId` | Com token | Adiciona o curso. `403` se o curso é exclusivo do Pro ou se o limite de cursos do plano foi atingido, `404` se não existe. Repetir o pedido não dá erro. |
@@ -219,13 +223,13 @@ Dados de estudo (XP, sequência, plano, progresso) ficam só no Firestore, nunca
 
 | Coleção | Campos principais |
 | --- | --- |
-| `users` | userId, supabaseUserId, nome, email, avatar, tema, metaDiaria (antigo, não é mais lido), settings (privacy, preferences, notifications), createdAt, lastSyncAt |
+| `users` | userId, supabaseUserId, nome, name (cópia do nome, gravada ao editar), email, avatar, tema, metaDiaria (antigo, não é mais lido), settings (privacy, preferences, notifications), createdAt, lastSyncAt |
 | `courses` | id (ex.: `sql-basico`), title, description, iconKey, lessonsTotal, requiredPlan (`free` ou `pro`), order, published |
 | `modules` | courseId, titulo, ordem, nivel |
 | `lessons` | moduleId, titulo, tipo, conteudo, xp, accessLevel |
 | `exercises` | lessonId, tipo, enunciado, opções, resposta/validador |
 | `progress` | Hoje por curso: userId, courseId, enrolled, lessonsDone, enrolledAt, updatedAt. O progresso por lição (lessonId, status, score, attempts, completedAt) será acrescentado com as lições. |
-| `stats` | userId, xp, streak, lastStudyDate, totalLessons |
+| `stats` | userId, xp, streak, lastStudyDate (`aaaa-mm-dd` ou data do Firestore), totalLessons, dailyXp e dailyXpDate (XP do dia e o dia a que ele se refere, em `aaaa-mm-dd`; ainda não são gravados por nenhuma rota) |
 | `subscriptions` | userId, plan, status, trialEndsAt, updatedAt |
 | `friendships` | userId, friendId, status, createdAt |
 
@@ -269,6 +273,16 @@ Antes da primeira execução, crie a tabela `users` no Supabase (SQL Editor) com
 | `npm run build` | Compila o TypeScript para a pasta `dist/`. |
 | `npm start` | Executa a versão compilada (produção). |
 | `npx tsx scripts/seed-courses.ts` | Grava o catálogo de cursos no Firestore (rode uma vez, e de novo quando mudar o catálogo). Grava no projeto do `.env`. |
+
+## Publicação (Vercel)
+
+A API roda na Vercel, em `https://api.codly.app.br`. Três detalhes do projeto existem por causa dela:
+
+- **`export default app` em `src/app.ts`:** a Vercel exige que o módulo exporte o app do Express (sem isso dá "Invalid export found in module"). É a única exportação padrão do projeto. Localmente o `server.ts` é quem sobe o servidor.
+- **`engines.node` em `22.x`:** fixa a versão do Node usada no deploy.
+- **`overrides` de `jwks-rsa` em `^3.2.2`:** evita o erro `ERR_REQUIRE_ESM` na validação do token do Firebase.
+
+As variáveis da seção abaixo precisam estar configuradas no painel da Vercel (e `CORS_ORIGINS` deve incluir o endereço do app).
 
 ## Variáveis de ambiente
 

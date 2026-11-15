@@ -15,6 +15,9 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 - O acesso a conteúdo é calculado no servidor pelo plano do aluno (`plan`, `status`, `trialEndsAt`), em `getUserPlan` (`services/subscriptions.service.ts`). Existem só dois planos: `free` (padrão) e `pro`.
 - Regras dos planos: cursos avançados são exclusivos do Pro, e o plano gratuito tem limite de cursos ativos ao mesmo tempo (`plans.limits`). O Pro não tem limite. A trava é sempre aplicada na API; o app só mostra o motivo (`lockReason`: `plan` ou `limit`).
 - Dado de plano inválido ou desconhecido falha fechado: no usuário vira `free` e no curso exige `pro`. Nunca libere acesso por causa de um valor inesperado.
+- Nível, sequência, meta do dia e cursos ativos que o app mostra na tela inicial e no perfil são calculados aqui, em `getSummary` (`services/summary.service.ts`). O app nunca calcula. A sequência volta a 0 se o aluno não estudou ontem nem hoje, e o dia é contado no fuso de Brasília (`levels.timeZone`).
+- As configurações do usuário (privacidade, preferências e notificações) ficam no campo `settings` do documento `users`, sempre devolvidas completas (o salvo por cima dos padrões de `config/settings.ts`). Gravar usa `set` com `merge`, e a entrada passa por `updateSettingsSchema`, que recusa campo desconhecido. Quem aplica as flags de privacidade (esconder online, curso atual, sequência e ranking) é esta API, em cada rota que devolve dados de outras pessoas.
+- Busca de pessoas (`usersSearch.service.ts`) devolve só dados públicos (`uid`, `name`, `avatarUrl`), nunca e-mail nem campos internos.
 - Remover um curso só marca `enrolled: false` em `progress`. O progresso (`lessonsDone`) nunca é apagado por isso.
 - Só esta API acessa o Firestore. Use sempre o `db` de `src/config/firebase.ts`.
 - Nunca leia `process.env` fora de `src/config/env.ts`. Todo o resto importa `env`.
@@ -66,7 +69,8 @@ API Node.js (Express 5 + TypeScript) da plataforma Codly. Valida o login do Fire
 
 - TypeScript estrito. Sem `any`, sem `@ts-ignore`.
 - CommonJS: imports sem extensão (`"./app"`, não `"./app.js"`). Não adicione `"type": "module"`.
-- Prefira exportação nomeada (`export function`, `export const`). Sem `export default`.
+- Prefira exportação nomeada (`export function`, `export const`). Sem `export default`, com uma única exceção: `src/app.ts` exporta o `app` como padrão, porque a Vercel exige.
+- Mantenha o `engines.node` em `22.x` e o `overrides` de `jwks-rsa` no `package.json`: sem o override a validação do token quebra em produção (`ERR_REQUIRE_ESM`).
 - Indentação de 4 espaços, igual ao `codly-app`.
 - Logs de erro com `console.error` contendo método e rota, sem dados sensíveis (token, e-mail completo, chaves).
 - Não instale bibliotecas novas sem avisar e justificar.
