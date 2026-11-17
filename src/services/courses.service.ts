@@ -8,11 +8,11 @@ import { getUserPlan, toPlanId } from "./subscriptions.service";
 type LockReason = "plan" | "limit";
 
 /** Plano do curso. Se o dado estiver inválido, exige o Pro (nunca libera por engano). */
-function requiredPlanOf(value: unknown): PlanId {
+export function requiredPlanOf(value: unknown): PlanId {
     return toPlanId(value) ?? "pro";
 }
 
-function isLocked(userPlan: PlanId, requiredPlan: PlanId) {
+export function isLocked(userPlan: PlanId, requiredPlan: PlanId) {
     return plans.levels[userPlan] < plans.levels[requiredPlan];
 }
 
@@ -22,7 +22,6 @@ function lockReasonOf(
     enrolled: boolean,
     limitReached: boolean,
 ): LockReason | null {
-    // Quem já tem o curso não vê trava
     if (enrolled) return null;
     if (isLocked(userPlan, requiredPlan)) return "plan";
     if (limitReached) return "limit";

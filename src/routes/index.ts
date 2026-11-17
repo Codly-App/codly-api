@@ -5,6 +5,7 @@ import { coursesRouter } from "./courses";
 import { healthRouter } from "./health";
 import { meRouter } from "./me";
 import { usersRouter } from "./users";
+import { lessonsRouter } from "./lessons";
 
 export const routes = Router();
 
@@ -15,5 +16,6 @@ routes.use(healthRouter);
 routes.use(authFailLimiter, requireAuth, userLimiter);
 
 routes.use(meRouter);
+routes.use(lessonsRouter);
 routes.use(coursesRouter);
 routes.use(usersRouter);

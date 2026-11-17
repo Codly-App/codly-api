@@ -2,29 +2,8 @@ import type { Timestamp } from "firebase-admin/firestore";
 import { collections } from "../config/collections";
 import { db } from "../config/firebase";
 import { levels } from "../config/levels";
+import { todayKey, toDayKey, yesterdayKey } from "./day.service";
 import { getUserPlan } from "./subscriptions.service";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-
-const dayFormatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: levels.timeZone,
-});
-
-function dayKey(date: Date) {
-    return dayFormatter.format(date);
-}
-
-
-function toDayKey(value: unknown): string | null {
-    if (typeof value === "string") return value;
-
-    if (value && typeof (value as Timestamp).toDate === "function") {
-        return dayKey((value as Timestamp).toDate());
-    }
-
-    return null;
-}
 
 function millisOf(value: unknown): number {
     return value && typeof (value as Timestamp).toMillis === "function"
@@ -47,8 +26,8 @@ export async function getSummary(userId: string) {
     const stats = statsSnap.data();
     const user = userSnap.data();
 
-    const today = dayKey(new Date());
-    const yesterday = dayKey(new Date(Date.now() - DAY_MS));
+    const today = todayKey();
+    const yesterday = yesterdayKey();
     const lastStudy = toDayKey(stats?.lastStudyDate);
 
     // Quem não estudou ontem nem hoje perdeu a sequência
